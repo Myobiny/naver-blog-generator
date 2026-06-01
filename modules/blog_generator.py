@@ -1,4 +1,4 @@
-import anthropic
+from google import genai
 from .restaurant_fetcher import RestaurantInfo
 
 
@@ -28,11 +28,11 @@ def generate_blog_post(
     restaurant_info: RestaurantInfo,
     photo_analysis: str,
     writing_style: str,
-    client: anthropic.Anthropic,
+    api_key: str,
 ) -> str:
-    restaurant_ctx = _build_restaurant_context(restaurant_info)
+    client = genai.Client(api_key=api_key)
 
-    # 주소에서 지역명 추출 (SEO 키워드용)
+    restaurant_ctx = _build_restaurant_context(restaurant_info)
     address_parts = restaurant_info.address.split() if restaurant_info.address else []
     location_keywords = " ".join(address_parts[:3]) if address_parts else "맛집"
 
@@ -72,9 +72,8 @@ def generate_blog_post(
 
 지금 바로 완성된 블로그 포스팅 전문을 작성해주세요. 마크다운 형식으로 작성하고, 실제 네이버 블로그에 바로 붙여넣을 수 있는 수준으로 완성도 높게 작성해주세요."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4000,
-        messages=[{"role": "user", "content": prompt}],
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
     )
-    return response.content[0].text
+    return response.text

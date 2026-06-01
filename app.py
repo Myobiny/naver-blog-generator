@@ -1,10 +1,12 @@
 import streamlit as st
-import anthropic
 import os
+from dotenv import load_dotenv
 
 from modules.restaurant_fetcher import search_restaurant, RestaurantInfo
 from modules.image_analyzer import analyze_food_photos
 from modules.blog_generator import generate_blog_post, WRITING_STYLES
+
+load_dotenv()
 
 st.set_page_config(
     page_title="네이버 블로그 맛집 글 생성기",
@@ -15,36 +17,31 @@ st.set_page_config(
 st.title("🍽️ 네이버 블로그 맛집 글 자동 생성기")
 st.caption("식당명 + 사진만 넣으면 SEO/GEO 최적화된 블로그 글이 완성됩니다")
 
-# ── API 키 확인 (Streamlit Cloud secrets → 환경변수 → UI 입력 순서로 시도) ──
-def _get_secret(key: str) -> str:
-    try:
-        return st.secrets.get(key, "") or ""
-    except Exception:
-        return ""
+# ── API 키 확인 ──────────────────────────────────────────────────────────────
+gemini_key = os.getenv("GEMINI_API_KEY", "")
 
-anthropic_key = _get_secret("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
-naver_id = _get_secret("NAVER_CLIENT_ID") or os.getenv("NAVER_CLIENT_ID", "")
-naver_secret = _get_secret("NAVER_CLIENT_SECRET") or os.getenv("NAVER_CLIENT_SECRET", "")
-kakao_key = _get_secret("KAKAO_REST_API_KEY") or os.getenv("KAKAO_REST_API_KEY", "")
-
-# 환경변수에 없으면 UI에서 입력받음
-if not anthropic_key:
-    with st.expander("⚙️ API 키 설정", expanded=True):
-        anthropic_key = st.text_input("Anthropic API Key *", type="password", key="api_key_input")
-        st.caption("키는 세션 중에만 사용되며 서버에 저장되지 않습니다.")
-    if not anthropic_key:
-        st.info("Claude API 키가 없으면 [console.anthropic.com](https://console.anthropic.com) 에서 무료로 발급받으세요.")
+if not gemini_key:
+    with st.expander("⚙️ Gemini API 키 설정", expanded=True):
+        gemini_key = st.text_input(
+            "Google Gemini API Key",
+            type="password",
+            key="gemini_key_input",
+            placeholder="AIzaSy...",
+        )
+        st.caption("무료 키 발급: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) (신용카드 불필요)")
+    if not gemini_key:
         st.stop()
 
-# 네이버/카카오 키가 없으면 환경변수에 임시 설정 (직접입력 옵션으로 대체)
+# 네이버/카카오 키 로드
+naver_id = os.getenv("NAVER_CLIENT_ID", "")
+naver_secret = os.getenv("NAVER_CLIENT_SECRET", "")
+kakao_key = os.getenv("KAKAO_REST_API_KEY", "")
 if naver_id:
     os.environ["NAVER_CLIENT_ID"] = naver_id
 if naver_secret:
     os.environ["NAVER_CLIENT_SECRET"] = naver_secret
 if kakao_key:
     os.environ["KAKAO_REST_API_KEY"] = kakao_key
-
-client = anthropic.Anthropic(api_key=anthropic_key)
 
 # ── 1단계: 식당 검색 ─────────────────────────────────────────────────────────
 st.header("1️⃣ 식당 검색")
@@ -58,28 +55,23 @@ with col1:
 with col2:
     search_btn = st.button("🔍 검색", use_container_width=True)
 
-selected_restaurant = None  # type: RestaurantInfo | None
+selected_restaurant = None
 
 if search_btn and restaurant_name_input:
     with st.spinner("식당 정보를 검색 중입니다..."):
         results = search_restaurant(restaurant_name_input)
 
     if results:
-        st.success(f"{len(results)}개의 결과를 찾았습니다. 해당 식당을 선택해주세요.")
+        st.success(f"{len(results)}개의 결과를 찾았습니다.")
         options = {
             f"{r.name} — {r.address} ({r.source.upper()})": r
             for r in results
         }
-        # 검색 결과를 상태에 저장
         st.session_state["search_results"] = options
     else:
-        st.warning(
-            "검색 결과가 없습니다. 네이버/카카오 API 키를 확인하거나 "
-            "아래 '직접 입력' 버튼으로 정보를 수동으로 입력해주세요."
-        )
+        st.warning("검색 결과가 없습니다. 아래 직접 입력 옵션을 사용해주세요.")
         st.session_state["search_results"] = {}
 
-# 검색 결과 선택
 if "search_results" in st.session_state and st.session_state["search_results"]:
     options = st.session_state["search_results"]
     chosen_label = st.radio("검색 결과", list(options.keys()), label_visibility="collapsed")
@@ -95,7 +87,6 @@ if "search_results" in st.session_state and st.session_state["search_results"]:
             if r.map_url:
                 cols[1].markdown(f"**지도**: [바로가기]({r.map_url})")
 
-# 직접 입력 옵션
 with st.expander("✏️ 식당 정보 직접 입력 (검색 결과가 없을 때)"):
     manual_name = st.text_input("식당명", key="manual_name")
     manual_category = st.text_input("카테고리 (예: 한식 > 냉면)", key="manual_cat")
@@ -170,29 +161,26 @@ if selected_restaurant is None:
 if generate_btn and selected_restaurant:
     photo_analysis = ""
 
-    # 사진 분석
     if uploaded_files:
         with st.spinner("📸 사진을 분석 중입니다..."):
             image_bytes_list = [f.read() for f in uploaded_files[:6]]
             try:
-                photo_analysis = analyze_food_photos(image_bytes_list, client)
+                photo_analysis = analyze_food_photos(image_bytes_list, gemini_key)
             except Exception as e:
-                st.warning(f"사진 분석 중 오류가 발생했습니다: {e}")
+                st.warning(f"사진 분석 중 오류: {e}")
 
-    # 블로그 글 생성
-    with st.spinner("✍️ SEO/GEO 최적화 블로그 글을 작성 중입니다... (30초~1분 소요)"):
+    with st.spinner("✍️ SEO/GEO 최적화 블로그 글을 작성 중입니다... (10~30초 소요)"):
         try:
             blog_content = generate_blog_post(
                 restaurant_info=selected_restaurant,
                 photo_analysis=photo_analysis,
                 writing_style=final_style,
-                client=client,
+                api_key=gemini_key,
             )
             st.session_state["blog_content"] = blog_content
         except Exception as e:
-            st.error(f"글 생성 중 오류가 발생했습니다: {e}")
+            st.error(f"글 생성 중 오류: {e}")
 
-# 생성된 글 출력
 if "blog_content" in st.session_state:
     content = st.session_state["blog_content"]
 
@@ -210,9 +198,8 @@ if "blog_content" in st.session_state:
             height=600,
             key="copy_area",
         )
-        st.caption("💡 네이버 블로그 편집기에서 'HTML 편집' 모드 대신 일반 텍스트로 붙여넣기 후 서식을 조정하세요.")
+        st.caption("💡 네이버 블로그 편집기에 일반 텍스트로 붙여넣기 후 서식을 조정하세요.")
 
-    # 재생성 버튼
     if st.button("🔄 글 다시 생성하기"):
         del st.session_state["blog_content"]
         st.rerun()
